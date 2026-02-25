@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { devices, type Device, type DeviceColor } from "./devices";
 import { frames } from "./frames";
+import { saveFrame, loadFrame } from "./frame-store";
 
 function App() {
   const [image, setImage] = useState<string | null>(null);
@@ -8,8 +9,25 @@ function App() {
   const [color, setColor] = useState<DeviceColor>(devices[0].colors[0]);
   const [bgColor, setBgColor] = useState("#ffffff");
   const [transparentBg, setTransparentBg] = useState(false);
+  /** URL of the custom PNG frame from IndexedDB (null = use SVG fallback) */
+  const [customFrame, setCustomFrame] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const frameInputRef = useRef<HTMLInputElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
+
+  // Load custom frame from IndexedDB when device/color changes
+  useEffect(() => {
+    let cancelled = false;
+    loadFrame(device.id, color.name).then((url) => {
+      if (!cancelled) setCustomFrame(url);
+    });
+    return () => {
+      cancelled = true;
+      // Revoke previous URL
+      if (customFrame) URL.revokeObjectURL(customFrame);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [device.id, color.name]);
 
   const handleFile = useCallback((file: File) => {
     if (!file.type.startsWith("image/")) return;
@@ -52,6 +70,15 @@ function App() {
     setColor(d.colors[0]);
   };
 
+  const handleFrameImport = async (file: File) => {
+    if (!file.type.startsWith("image/")) return;
+    await saveFrame(device.id, color.name, file);
+    const url = await loadFrame(device.id, color.name);
+    setCustomFrame(url);
+  };
+
+  const usesCustomFrame = !!customFrame;
+
   const renderToCanvas = useCallback(async (): Promise<HTMLCanvasElement> => {
     const padding = 80;
     const canvas = document.createElement("canvas");
@@ -76,22 +103,29 @@ function App() {
       ctx.restore();
     }
 
-    // Serialize SVG from DOM and draw on canvas
-    const svgEl = frameRef.current?.querySelector("svg");
-    if (svgEl) {
-      const clone = svgEl.cloneNode(true) as SVGSVGElement;
-      clone.setAttribute("width", String(device.frameWidth));
-      clone.setAttribute("height", String(device.frameHeight));
-      const svgData = new XMLSerializer().serializeToString(clone);
-      const svgBlob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" });
-      const url = URL.createObjectURL(svgBlob);
-      const frameImg = await loadImage(url);
-      URL.revokeObjectURL(url);
+    // Draw frame on top
+    if (customFrame) {
+      // PNG frame — draw directly
+      const frameImg = await loadImage(customFrame);
       ctx.drawImage(frameImg, padding, padding, device.frameWidth, device.frameHeight);
+    } else {
+      // SVG fallback — serialize from DOM
+      const svgEl = frameRef.current?.querySelector("svg");
+      if (svgEl) {
+        const clone = svgEl.cloneNode(true) as SVGSVGElement;
+        clone.setAttribute("width", String(device.frameWidth));
+        clone.setAttribute("height", String(device.frameHeight));
+        const svgData = new XMLSerializer().serializeToString(clone);
+        const svgBlob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" });
+        const url = URL.createObjectURL(svgBlob);
+        const frameImg = await loadImage(url);
+        URL.revokeObjectURL(url);
+        ctx.drawImage(frameImg, padding, padding, device.frameWidth, device.frameHeight);
+      }
     }
 
     return canvas;
-  }, [device, image, bgColor, transparentBg]);
+  }, [device, customFrame, image, bgColor, transparentBg]);
 
   const handleDownload = async () => {
     const canvas = await renderToCanvas();
@@ -157,6 +191,44 @@ function App() {
                 />
               ))}
             </div>
+          </section>
+
+          {/* Frame import */}
+          <section>
+            <Label>Device Frame</Label>
+            {usesCustomFrame ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-emerald-400">Custom PNG loaded</span>
+                <button
+                  onClick={() => frameInputRef.current?.click()}
+                  className="text-xs text-zinc-500 hover:text-zinc-300 underline"
+                >
+                  Replace
+                </button>
+              </div>
+            ) : (
+              <>
+                <button
+                  onClick={() => frameInputRef.current?.click()}
+                  className="w-full py-2 px-3 rounded-lg border border-dashed border-zinc-700 hover:border-zinc-500 text-sm text-zinc-400 hover:text-zinc-200 transition-colors"
+                >
+                  Import frame PNG
+                </button>
+                <p className="text-xs text-zinc-600 mt-1">
+                  Using built-in frame. Import a transparent PNG for best results.
+                </p>
+              </>
+            )}
+            <input
+              ref={frameInputRef}
+              type="file"
+              accept="image/png"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleFrameImport(file);
+              }}
+            />
           </section>
 
           <section>
@@ -260,12 +332,21 @@ function App() {
               >
                 <img src={image} alt="Screenshot" className="w-full h-full object-cover" />
               </div>
-              {/* SVG frame layer */}
-              {FrameComponent && (
-                <FrameComponent
-                  frameColor={color.hex}
+              {/* Frame layer — PNG or SVG fallback */}
+              {customFrame ? (
+                <img
+                  src={customFrame}
+                  alt={`${device.name} frame`}
                   className="w-full h-full relative z-10 pointer-events-none"
+                  draggable={false}
                 />
+              ) : (
+                FrameComponent && (
+                  <FrameComponent
+                    frameColor={color.hex}
+                    className="w-full h-full relative z-10 pointer-events-none"
+                  />
+                )
               )}
             </div>
           )}
