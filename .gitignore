@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local frame seeding (contains copyrighted PNGs)
+seed-auto.html
+seed-local.mjs

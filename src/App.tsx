@@ -1,6 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { devices, type Device, type DeviceColor } from "./devices";
-import { frames } from "./frames";
 import { saveFrame, loadFrame } from "./frame-store";
 
 function App() {
@@ -9,24 +8,24 @@ function App() {
   const [color, setColor] = useState<DeviceColor>(devices[0].colors[0]);
   const [bgColor, setBgColor] = useState("#ffffff");
   const [transparentBg, setTransparentBg] = useState(false);
-  /** URL of the custom PNG frame from IndexedDB (null = use SVG fallback) */
   const [customFrame, setCustomFrame] = useState<string | null>(null);
+  const [frameLoading, setFrameLoading] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const frameInputRef = useRef<HTMLInputElement>(null);
-  const frameRef = useRef<HTMLDivElement>(null);
 
   // Load custom frame from IndexedDB when device/color changes
   useEffect(() => {
     let cancelled = false;
+    setFrameLoading(true);
     loadFrame(device.id, color.name).then((url) => {
-      if (!cancelled) setCustomFrame(url);
+      if (!cancelled) {
+        setCustomFrame(url);
+        setFrameLoading(false);
+      }
     });
     return () => {
       cancelled = true;
-      // Revoke previous URL
-      if (customFrame) URL.revokeObjectURL(customFrame);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [device.id, color.name]);
 
   const handleFile = useCallback((file: File) => {
@@ -77,7 +76,7 @@ function App() {
     setCustomFrame(url);
   };
 
-  const usesCustomFrame = !!customFrame;
+  const hasFrame = !!customFrame;
 
   const renderToCanvas = useCallback(async (): Promise<HTMLCanvasElement> => {
     const padding = 80;
@@ -91,10 +90,9 @@ function App() {
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
 
-    // Draw screenshot clipped to screen area
     if (image) {
       const s = device.screen;
-      const screenImg = await loadImage(image);
+      const screenImg = await loadImg(image);
       ctx.save();
       roundedRect(ctx, padding + s.x, padding + s.y, s.width, s.height, device.screenRadius);
       ctx.clip();
@@ -103,25 +101,9 @@ function App() {
       ctx.restore();
     }
 
-    // Draw frame on top
     if (customFrame) {
-      // PNG frame — draw directly
-      const frameImg = await loadImage(customFrame);
+      const frameImg = await loadImg(customFrame);
       ctx.drawImage(frameImg, padding, padding, device.frameWidth, device.frameHeight);
-    } else {
-      // SVG fallback — serialize from DOM
-      const svgEl = frameRef.current?.querySelector("svg");
-      if (svgEl) {
-        const clone = svgEl.cloneNode(true) as SVGSVGElement;
-        clone.setAttribute("width", String(device.frameWidth));
-        clone.setAttribute("height", String(device.frameHeight));
-        const svgData = new XMLSerializer().serializeToString(clone);
-        const svgBlob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" });
-        const url = URL.createObjectURL(svgBlob);
-        const frameImg = await loadImage(url);
-        URL.revokeObjectURL(url);
-        ctx.drawImage(frameImg, padding, padding, device.frameWidth, device.frameHeight);
-      }
     }
 
     return canvas;
@@ -143,17 +125,19 @@ function App() {
     }, "image/png");
   };
 
-  const FrameComponent = frames[device.id];
   const previewScale = 0.25;
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col">
-      <header className="border-b border-zinc-800 px-6 py-4">
+      <header className="border-b border-zinc-800 px-6 py-4 flex items-center justify-between">
         <h1 className="text-lg font-semibold tracking-tight">Mockup Generator</h1>
+        <a href="seed-frames.html" target="_blank"
+          className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors">
+          Bulk import frames
+        </a>
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar */}
         <aside className="w-72 border-r border-zinc-800 p-5 flex flex-col gap-6 overflow-y-auto shrink-0">
           <section>
             <Label>Device</Label>
@@ -193,12 +177,14 @@ function App() {
             </div>
           </section>
 
-          {/* Frame import */}
           <section>
             <Label>Device Frame</Label>
-            {usesCustomFrame ? (
+            {hasFrame ? (
               <div className="flex items-center gap-2">
-                <span className="text-xs text-emerald-400">Custom PNG loaded</span>
+                <span className="text-xs text-emerald-400 flex items-center gap-1">
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
+                  Frame loaded
+                </span>
                 <button
                   onClick={() => frameInputRef.current?.click()}
                   className="text-xs text-zinc-500 hover:text-zinc-300 underline"
@@ -215,7 +201,7 @@ function App() {
                   Import frame PNG
                 </button>
                 <p className="text-xs text-zinc-600 mt-1">
-                  Using built-in frame. Import a transparent PNG for best results.
+                  Use a transparent PNG device frame (e.g. from Bezel app)
                 </p>
               </>
             )}
@@ -312,14 +298,13 @@ function App() {
             </div>
           ) : (
             <div
-              ref={frameRef}
               className="relative shrink-0"
               style={{
                 width: device.frameWidth * previewScale,
                 height: device.frameHeight * previewScale,
               }}
             >
-              {/* Screenshot layer */}
+              {/* Screenshot */}
               <div
                 className="absolute overflow-hidden"
                 style={{
@@ -332,21 +317,23 @@ function App() {
               >
                 <img src={image} alt="Screenshot" className="w-full h-full object-cover" />
               </div>
-              {/* Frame layer — PNG or SVG fallback */}
-              {customFrame ? (
+              {/* Frame */}
+              {hasFrame ? (
                 <img
-                  src={customFrame}
+                  src={customFrame!}
                   alt={`${device.name} frame`}
                   className="w-full h-full relative z-10 pointer-events-none"
                   draggable={false}
                 />
-              ) : (
-                FrameComponent && (
-                  <FrameComponent
-                    frameColor={color.hex}
-                    className="w-full h-full relative z-10 pointer-events-none"
-                  />
-                )
+              ) : !frameLoading && (
+                <div
+                  className="absolute inset-0 z-10 pointer-events-none border-2 border-dashed border-zinc-600 flex items-start justify-center pt-4"
+                  style={{ borderRadius: device.screenRadius * previewScale + 8 }}
+                >
+                  <span className="text-[10px] text-zinc-500 bg-zinc-950/80 px-2 py-0.5 rounded">
+                    No frame — import a PNG
+                  </span>
+                </div>
               )}
             </div>
           )}
@@ -364,7 +351,7 @@ function Label({ children }: { children: React.ReactNode }) {
   );
 }
 
-function loadImage(src: string): Promise<HTMLImageElement> {
+function loadImg(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
