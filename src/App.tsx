@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { devices, type Device, type DeviceColor } from "./devices";
-import { saveFrame, loadFrame } from "./frame-store";
+
+const BASE = import.meta.env.BASE_URL;
 
 function App() {
   const [image, setImage] = useState<string | null>(null);
@@ -8,25 +9,9 @@ function App() {
   const [color, setColor] = useState<DeviceColor>(devices[0].colors[0]);
   const [bgColor, setBgColor] = useState("#ffffff");
   const [transparentBg, setTransparentBg] = useState(false);
-  const [customFrame, setCustomFrame] = useState<string | null>(null);
-  const [frameLoading, setFrameLoading] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const frameInputRef = useRef<HTMLInputElement>(null);
 
-  // Load custom frame from IndexedDB when device/color changes
-  useEffect(() => {
-    let cancelled = false;
-    setFrameLoading(true);
-    loadFrame(device.id, color.name).then((url) => {
-      if (!cancelled) {
-        setCustomFrame(url);
-        setFrameLoading(false);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [device.id, color.name]);
+  const frameSrc = BASE + color.frame;
 
   const handleFile = useCallback((file: File) => {
     if (!file.type.startsWith("image/")) return;
@@ -69,15 +54,6 @@ function App() {
     setColor(d.colors[0]);
   };
 
-  const handleFrameImport = async (file: File) => {
-    if (!file.type.startsWith("image/")) return;
-    await saveFrame(device.id, color.name, file);
-    const url = await loadFrame(device.id, color.name);
-    setCustomFrame(url);
-  };
-
-  const hasFrame = !!customFrame;
-
   const renderToCanvas = useCallback(async (): Promise<HTMLCanvasElement> => {
     const padding = 80;
     const canvas = document.createElement("canvas");
@@ -101,13 +77,11 @@ function App() {
       ctx.restore();
     }
 
-    if (customFrame) {
-      const frameImg = await loadImg(customFrame);
-      ctx.drawImage(frameImg, padding, padding, device.frameWidth, device.frameHeight);
-    }
+    const frameImg = await loadImg(frameSrc);
+    ctx.drawImage(frameImg, padding, padding, device.frameWidth, device.frameHeight);
 
     return canvas;
-  }, [device, customFrame, image, bgColor, transparentBg]);
+  }, [device, frameSrc, image, bgColor, transparentBg]);
 
   const handleDownload = async () => {
     const canvas = await renderToCanvas();
@@ -129,12 +103,8 @@ function App() {
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col">
-      <header className="border-b border-zinc-800 px-6 py-4 flex items-center justify-between">
+      <header className="border-b border-zinc-800 px-6 py-4">
         <h1 className="text-lg font-semibold tracking-tight">Mockup Generator</h1>
-        <a href="seed-frames.html" target="_blank"
-          className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors">
-          Bulk import frames
-        </a>
       </header>
 
       <div className="flex flex-1 overflow-hidden">
@@ -175,46 +145,6 @@ function App() {
                 />
               ))}
             </div>
-          </section>
-
-          <section>
-            <Label>Device Frame</Label>
-            {hasFrame ? (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-emerald-400 flex items-center gap-1">
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
-                  Frame loaded
-                </span>
-                <button
-                  onClick={() => frameInputRef.current?.click()}
-                  className="text-xs text-zinc-500 hover:text-zinc-300 underline"
-                >
-                  Replace
-                </button>
-              </div>
-            ) : (
-              <>
-                <button
-                  onClick={() => frameInputRef.current?.click()}
-                  className="w-full py-2 px-3 rounded-lg border border-dashed border-zinc-700 hover:border-zinc-500 text-sm text-zinc-400 hover:text-zinc-200 transition-colors"
-                >
-                  Import frame PNG
-                </button>
-                <p className="text-xs text-zinc-600 mt-1">
-                  Use a transparent PNG device frame (e.g. from Bezel app)
-                </p>
-              </>
-            )}
-            <input
-              ref={frameInputRef}
-              type="file"
-              accept="image/png"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) handleFrameImport(file);
-              }}
-            />
           </section>
 
           <section>
@@ -304,7 +234,6 @@ function App() {
                 height: device.frameHeight * previewScale,
               }}
             >
-              {/* Screenshot */}
               <div
                 className="absolute overflow-hidden"
                 style={{
@@ -317,24 +246,12 @@ function App() {
               >
                 <img src={image} alt="Screenshot" className="w-full h-full object-cover" />
               </div>
-              {/* Frame */}
-              {hasFrame ? (
-                <img
-                  src={customFrame!}
-                  alt={`${device.name} frame`}
-                  className="w-full h-full relative z-10 pointer-events-none"
-                  draggable={false}
-                />
-              ) : !frameLoading && (
-                <div
-                  className="absolute inset-0 z-10 pointer-events-none border-2 border-dashed border-zinc-600 flex items-start justify-center pt-4"
-                  style={{ borderRadius: device.screenRadius * previewScale + 8 }}
-                >
-                  <span className="text-[10px] text-zinc-500 bg-zinc-950/80 px-2 py-0.5 rounded">
-                    No frame — import a PNG
-                  </span>
-                </div>
-              )}
+              <img
+                src={frameSrc}
+                alt={`${device.name} frame`}
+                className="w-full h-full relative z-10 pointer-events-none"
+                draggable={false}
+              />
             </div>
           )}
         </main>
